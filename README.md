@@ -1,71 +1,193 @@
-# Eliza
+# StarkNet DeFi Automated Trading System
 
-## Edit the character files
+An autonomous trading system built on Eliza framework that manages DeFi investments across StarkNet protocols based on risk profiles and market conditions.
 
-Open `src/character.ts` to modify the default character. Uncomment and edit.
+## Technical Architecture
 
-### Custom characters
+### 1. Character System
+Characters define investment strategies and risk profiles:
+- `starknet-conservative.character.json`: Low-risk strategy (5-15% APY)
+- `starknet-moderate.character.json`: Balanced strategy (20-40% APY)
+- `starknet-aggressive.character.json`: High-risk strategy (100%+ APY)
 
-To load custom characters instead:
-- Use `pnpm start --characters="path/to/your/character.json"`
-- Multiple character files can be loaded simultaneously
-
-### Add clients
-
-```diff
-- clients: [],
-+ clients: [Clients.TWITTER, Clients.DISCORD],
+Each character contains:
+```json
+{
+  "knowledge": [
+    "Portfolio Allocation: 30% lending (Nostra/zkLend), 30% DEX LP...",
+    "Risk Management: minimum $2M TVL, maximum 3% slippage...",
+    "Performance Metrics: Target APY ranges, risk tolerances..."
+  ]
+}
 ```
 
-## Duplicate the .env.example template
+### 2. Provider System
+Fetches real-time data from StarkNet:
 
-```bash
-cp .env.example .env
+```typescript
+interface MarketData {
+  tokens: {
+    price: number;
+    priceChange24h: number;
+    volume24h: number;
+  };
+  protocols: {
+    tvl: number;
+    apy: {
+      conservative: number;
+      moderate: number;
+      aggressive: number;
+    };
+    strategies: {
+      minAmount: number;
+      expectedApy: number;
+      risk: 'conservative' | 'moderate' | 'aggressive';
+    }
+  };
+}
 ```
 
-\* Fill out the .env file with your own values.
+### 3. Evaluator System
+Two main evaluators:
 
-### Add login credentials and keys to .env
-
-```diff
--DISCORD_APPLICATION_ID=
--DISCORD_API_TOKEN= # Bot token
-+DISCORD_APPLICATION_ID="000000772361146438"
-+DISCORD_API_TOKEN="OTk1MTU1NzcyMzYxMT000000.000000.00000000000000000000000000000000"
-...
--OPENROUTER_API_KEY=
-+OPENROUTER_API_KEY="sk-xx-xx-xxx"
-...
--TWITTER_USERNAME= # Account username
--TWITTER_PASSWORD= # Account password
--TWITTER_EMAIL= # Account email
-+TWITTER_USERNAME="username"
-+TWITTER_PASSWORD="password"
-+TWITTER_EMAIL="your@email.com"
+#### Strategy Evaluator
+- Parses investment amount from messages
+- Analyzes market conditions
+- Uses character knowledge to determine allocations
+- Returns structured allocation strategy:
+```typescript
+interface AllocationStrategy {
+  totalAmount: number;
+  allocations: Array<{
+    protocol: string;
+    amount: number;
+    strategy: string;
+    expectedApy: number;
+  }>;
+  marketConditions: string;
+  reasoning: string;
+}
 ```
 
-## Install dependencies and start your agent
+#### Position Evaluator
+- Tracks current positions
+- Monitors performance
+- Triggers rebalancing when needed
 
-```bash
-pnpm i && pnpm start
-```
-Note: this requires node to be at least version 22 when you install packages and run the agent.
-
+### 4. Action System
+Executes trades based on evaluator recommendations:
 ```mermaid
 graph TD
-    A[Agent Running] -->|Every Interval| B[Provider: Smart Contract]
-    B -->|Get Current Funds| C[Evaluator: Strategy]
-    C -->|Generate Strategy| D[Evaluator: Risk Monitor]
-    D -->|Check Risk Levels| E[Action: Execute]
-    E -->|Execute Trades| F[Store Results]
-    F -->|Wait for Interval| A
+    A[AutoClient] -->|Every Hour| B[Fetch Market Data]
+    B --> C[Strategy Evaluator]
+    C -->|Generate Strategy| D[Position Evaluator]
+    D -->|Check Performance| E[Execute Trades]
+    E --> F[Update Positions]
+    F -->|Wait for Next Cycle| A
+```
+
+## Setup and Configuration
+
+1. Install Dependencies:
+```bash
+pnpm i
+```
+
+2. Configure Environment:
+```bash
+cp .env.example .env
+# Add your API keys and configuration
+```
+
+3. Start Trading System:
+```bash
+pnpm start --characters="characters/starknet-*.character.json"
+```
+
+## Technical Implementation Details
+
+### Market Analysis
+```typescript
+function analyzeMarketConditions(marketData: MarketData) {
+  const ethTrend = marketData?.tokens?.ETH?.priceChange24h || 0;
+  const tvlTrend = marketData?.protocols?.totalTvlChange24h || 0;
+  
+  return {
+    trend: ethTrend > 5 && tvlTrend > 0 ? 'bullish' : 'bearish',
+    reasoning: '...'
+  };
+}
+```
+
+### Dynamic Allocation
+```typescript
+function getProtocolAllocations(
+  amount: number,
+  riskLevel: string,
+  marketConditions: { trend: string },
+  protocolData: ProtocolData,
+  characterKnowledge: string[]
+) {
+  // Parse character's investment rules
+  const preferences = parseCharacterKnowledge(characterKnowledge);
+  
+  // Filter and sort protocols
+  const protocols = filterProtocolsByPreferences(protocolData, preferences);
+  
+  // Allocate funds based on character's strategy
+  return calculateAllocations(amount, protocols, marketConditions);
+}
+```
+
+## Safety Features
+
+1. Risk Management:
+   - TVL requirements per risk level
+   - Maximum allocation per protocol
+   - Slippage protection
+   - Protocol audit requirements
+
+2. Position Monitoring:
+   - Real-time performance tracking
+   - Automatic rebalancing triggers
+   - Loss prevention mechanisms
+
+3. Market Conditions:
+   - Volatility monitoring
+   - TVL change tracking
+   - Price trend analysis
+
+## Supported Protocols
+
+- AVNU: DEX aggregator
+- Ekubo: Concentrated liquidity
+- Nostra: Lending markets
+- zkLend: Leveraged lending
+- JediSwap: AMM
+- Vesu: Derivatives
+
+## Development
+
+### Adding New Protocols
+1. Update provider to fetch protocol data
+2. Add protocol strategies to character knowledge
+3. Implement protocol-specific execution in actions
+
+### Modifying Risk Profiles
+1. Edit character knowledge sections
+2. Update allocation percentages
+3. Adjust risk parameters
+
+### Testing
+```bash
+pnpm test
+# Runs through full investment cycle with mock data
 ```
 
 ## TODO
 
-* HOW TO GENERATE USER PROMPTS BY THE BACKEND SO THAT ACTIONS CAN BE EXECUTED - https://elizaos.github.io/eliza/docs/packages/clients/#automated-trading
 
 * FIX PROVIDERS API ERROR FOR RATE LIMITING
-* FIX marketUtils.ts IMPORT ERROR
 * ADD PROTOCOL DATA TO PROVIDERS
-* UPDATE CHARACTER FILES TO BE EXACT AND MORE PRECISE
+* UPDATE EVALUATORS TO BE UTILIZE CHARACTER KNOWLEDGE
+* UPDATE ACTIONS TO EXECUTE STRATEGY
