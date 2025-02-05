@@ -1,3 +1,5 @@
+import { IAgentRuntime, Memory, State } from "@elizaos/core";
+import { STARKNET_TOKENS, STARKNET_PROTOCOLS, Provider } from './token';
 import axios from 'axios';
 
 // Types for market data
@@ -37,6 +39,22 @@ interface TechnicalAnalysis {
     };
 }
 
+interface MarketData {
+    price: number;
+    priceChange24h: number;
+    volume24h: number;
+    volume24h_previous: number;
+    marketCap: number;
+    volatility: number;
+    technicalAnalysis: TechnicalAnalysis;
+    dexData: DexLiquidityData;
+    volatilityMetrics: {
+        volatility24h: number;
+        maxDrawdown: number;
+        sharpeRatio: number;
+    };
+}
+
 // Fallback data for when APIs are unavailable
 const fallbackData: Record<string, TokenPriceData> = {
     'starknet': {
@@ -52,83 +70,8 @@ const fallbackData: Record<string, TokenPriceData> = {
             activeAccounts: 50000
         },
         source: 'fallback'
-    },
-    'ethereum': {
-        price: 2250,
-        priceChange24h: 1.2,
-        marketCap: 270000000000,
-        totalVolume: 8000000000,
-        priceHistory: Array(24).fill(0).map((_, i) => 2250 + Math.sin(i / 4) * 20),
-        source: 'fallback'
-    },
-    'usd-coin': {
-        price: 1,
-        priceChange24h: 0,
-        marketCap: 25000000000,
-        totalVolume: 1000000000,
-        priceHistory: Array(24).fill(1),
-        source: 'fallback'
-    },
-    'dai': {
-        price: 1,
-        priceChange24h: 0,
-        marketCap: 5000000000,
-        totalVolume: 500000000,
-        priceHistory: Array(24).fill(1),
-        source: 'fallback'
     }
 };
-
-// Helper function to fetch token price data with fallbacks
-export async function fetchTokenPriceData(token: string): Promise<TokenPriceData> {
-    try {
-        // For other tokens, try CoinGecko with fallback
-        try {
-            const [priceData, historyData] = await Promise.all([
-                axios.get(`https://api.coingecko.com/api/v3/simple/price?ids=${token}&vs_currencies=usd&include_24hr_change=true&include_market_cap=true&include_24hr_vol=true`, {
-                    timeout: 10000
-                }),
-                axios.get(`https://api.coingecko.com/api/v3/coins/${token}/market_chart?vs_currency=usd&days=7`, {
-                    timeout: 10000
-                })
-            ]);
-
-            // Extract the last 24 points from the 7-day data to simulate hourly-like granularity
-            const prices = historyData.data.prices;
-            const lastDayPrices = prices.slice(Math.max(prices.length - 24, 0));
-            const normalizedPrices = lastDayPrices.map((p: number[]) => p[1]);
-
-            return {
-                price: priceData.data[token].usd,
-                priceChange24h: priceData.data[token].usd_24h_change,
-                marketCap: priceData.data[token].usd_market_cap,
-                totalVolume: priceData.data[token].usd_24h_vol,
-                priceHistory: normalizedPrices,
-                source: 'coingecko'
-            };
-        } catch (error) {
-            console.warn(`CoinGecko API error for ${token}, using fallback data:`, error.message);
-            return fallbackData[token] || {
-                price: token.includes('usd') ? 1 : 0,
-                priceChange24h: 0,
-                marketCap: 0,
-                totalVolume: 0,
-                priceHistory: Array(24).fill(token.includes('usd') ? 1 : 0),
-                source: 'fallback'
-            };
-        }
-    } catch (error) {
-        console.error(`Error fetching price data for ${token}:`, error.message);
-        return fallbackData[token] || {
-            price: token.includes('usd') ? 1 : 0,
-            priceChange24h: 0,
-            marketCap: 0,
-            totalVolume: 0,
-            priceHistory: Array(24).fill(token.includes('usd') ? 1 : 0),
-            source: 'fallback'
-        };
-    }
-}
 
 // Fallback DEX data
 const fallbackDexData: Record<string, DexLiquidityData> = {
@@ -141,21 +84,11 @@ const fallbackDexData: Record<string, DexLiquidityData> = {
         volume24h: 2000000,
         liquidity: 8000000,
         priceImpact: 1.2
-    },
-    'ETH/STRK': {
-        volume24h: 1500000,
-        liquidity: 5000000,
-        priceImpact: 1.5
-    },
-    'STRK/DAI': {
-        volume24h: 1000000,
-        liquidity: 4000000,
-        priceImpact: 1.8
     }
 };
 
 // Helper function to calculate volatility metrics
-export function calculateVolatilityMetrics(priceHistory: number[]): {
+function calculateVolatilityMetrics(priceHistory: number[]): {
     volatility24h: number;
     maxDrawdown: number;
     sharpeRatio: number;
@@ -164,18 +97,15 @@ export function calculateVolatilityMetrics(priceHistory: number[]): {
         return { volatility24h: 0, maxDrawdown: 0, sharpeRatio: 0 };
     }
 
-    // Calculate daily returns
     const returns = [];
     for (let i = 1; i < priceHistory.length; i++) {
         returns.push((priceHistory[i] - priceHistory[i - 1]) / priceHistory[i - 1]);
     }
 
-    // Calculate volatility (standard deviation of returns)
     const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
     const variance = returns.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / returns.length;
-    const volatility = Math.sqrt(variance) * Math.sqrt(365); // Annualized
+    const volatility = Math.sqrt(variance) * Math.sqrt(365);
 
-    // Calculate maximum drawdown
     let maxDrawdown = 0;
     let peak = priceHistory[0];
     for (const price of priceHistory) {
@@ -184,7 +114,6 @@ export function calculateVolatilityMetrics(priceHistory: number[]): {
         if (drawdown > maxDrawdown) maxDrawdown = drawdown;
     }
 
-    // Calculate Sharpe ratio (assuming risk-free rate of 2%)
     const riskFreeRate = 0.02;
     const excessReturn = mean * 365 - riskFreeRate;
     const sharpeRatio = excessReturn / volatility;
@@ -194,33 +123,6 @@ export function calculateVolatilityMetrics(priceHistory: number[]): {
         maxDrawdown: maxDrawdown * 100,
         sharpeRatio
     };
-}
-
-// Helper function to perform technical analysis
-export async function fetchTechnicalAnalysis(pair: string): Promise<TechnicalAnalysis> {
-    try {
-        // Fetch historical price data
-        const [token0, token1] = pair.split('/');
-        const priceHistory = await fetchTokenPriceData(token0.toLowerCase());
-
-        // Calculate RSI
-        const rsi = calculateRSI(priceHistory.priceHistory);
-
-        // Calculate MACD
-        const macd = calculateMACD(priceHistory.priceHistory);
-
-        // Calculate moving averages
-        const movingAverages = calculateMovingAverages(priceHistory.priceHistory);
-
-        return {
-            rsi,
-            macd,
-            movingAverages
-        };
-    } catch (error) {
-        console.error(`Error performing technical analysis for ${pair}:`, error);
-        throw error;
-    }
 }
 
 // Helper function to calculate RSI
@@ -292,4 +194,105 @@ function calculateMovingAverages(prices: number[]): {
 function calculateSMA(prices: number[], period: number): number {
     if (prices.length < period) return prices[prices.length - 1];
     return prices.slice(-period).reduce((a, b) => a + b) / period;
-} 
+}
+
+async function fetchTokenPriceData(token: string): Promise<TokenPriceData> {
+    try {
+        // Try CoinGecko with fallback
+        try {
+            const [priceData, historyData] = await Promise.all([
+                axios.get(`https://api.coingecko.com/api/v3/simple/price?ids=${token}&vs_currencies=usd&include_24hr_change=true&include_market_cap=true&include_24hr_vol=true`),
+                axios.get(`https://api.coingecko.com/api/v3/coins/${token}/market_chart?vs_currency=usd&days=7`)
+            ]);
+
+            const prices = historyData.data.prices;
+            const lastDayPrices = prices.slice(Math.max(prices.length - 24, 0));
+            const normalizedPrices = lastDayPrices.map((p: number[]) => p[1]);
+
+            return {
+                price: priceData.data[token].usd,
+                priceChange24h: priceData.data[token].usd_24h_change,
+                marketCap: priceData.data[token].usd_market_cap,
+                totalVolume: priceData.data[token].usd_24h_vol,
+                priceHistory: normalizedPrices,
+                source: 'coingecko'
+            };
+        } catch (error) {
+            console.warn(`CoinGecko API error for ${token}, using fallback data:`, error.message);
+            return fallbackData[token] || {
+                price: 0,
+                priceChange24h: 0,
+                marketCap: 0,
+                totalVolume: 0,
+                priceHistory: Array(24).fill(0),
+                source: 'fallback'
+            };
+        }
+    } catch (error) {
+        console.error(`Error fetching price data for ${token}:`, error.message);
+        throw error;
+    }
+}
+
+async function fetchTechnicalAnalysis(pair: string): Promise<TechnicalAnalysis> {
+    try {
+        const [token0] = pair.split('/');
+        const priceHistory = await fetchTokenPriceData(token0.toLowerCase());
+
+        const rsi = calculateRSI(priceHistory.priceHistory);
+        const macd = calculateMACD(priceHistory.priceHistory);
+        const movingAverages = calculateMovingAverages(priceHistory.priceHistory);
+
+        return { rsi, macd, movingAverages };
+    } catch (error) {
+        console.error(`Error performing technical analysis for ${pair}:`, error);
+        throw error;
+    }
+}
+
+export const marketProvider =
+    async () => {
+        try {
+            const marketData: Record<string, MarketData> = {};
+
+            // Fetch market data for each supported token
+            for (const [symbol, address] of Object.entries(STARKNET_TOKENS)) {
+                const priceData = await fetchTokenPriceData(symbol.toLowerCase());
+                const technicalAnalysis = await fetchTechnicalAnalysis(`${symbol}/USD`);
+                const volatilityMetrics = calculateVolatilityMetrics(priceData.priceHistory);
+
+                // Get DEX data for token pairs
+                const dexKey = `${symbol}/USDC`;
+                const dexData = fallbackDexData[dexKey] || {
+                    volume24h: 0,
+                    liquidity: 0,
+                    priceImpact: 0
+                };
+
+                marketData[symbol] = {
+                    price: priceData.price,
+                    priceChange24h: priceData.priceChange24h,
+                    volume24h: priceData.totalVolume,
+                    volume24h_previous: priceData.totalVolume * 0.9, // Estimate previous day
+                    marketCap: priceData.marketCap,
+                    volatility: volatilityMetrics.volatility24h,
+                    technicalAnalysis,
+                    dexData,
+                    volatilityMetrics
+                };
+            }
+
+            return JSON.stringify({
+                marketData,
+                timestamp: Date.now(),
+                dataQuality: {
+                    source: 'hybrid', // coingecko + fallback
+                    reliability: 'medium',
+                    lastUpdate: new Date().toISOString()
+                }
+            });
+        } catch (error) {
+            console.error("Error in market provider:", error);
+            throw error;
+        }
+    }
