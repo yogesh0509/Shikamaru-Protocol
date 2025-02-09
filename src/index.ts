@@ -1,15 +1,11 @@
-import { DirectClient } from "@elizaos/client-direct";
-import { AutoClientInterface } from "@elizaos/client-auto";
 import {
   AgentRuntime,
   elizaLogger,
-  settings,
   stringToUuid,
   type Character,
 } from "@elizaos/core";
 import { bootstrapPlugin } from "@elizaos/plugin-bootstrap";
 import { createNodePlugin } from "@elizaos/plugin-node";
-// import { solanaPlugin } from "@elizaos/plugin-solana";
 import { starknetPlugin } from "@elizaos/plugin-starknet";
 import fs from "fs";
 import net from "net";
@@ -19,8 +15,8 @@ import { initializeDbCache } from "./cache/index.ts";
 import { character } from "./character.ts";
 import { startChat } from "./chat/index.ts";
 import { initializeClients } from "./clients/index.ts";
-import { marketProvider, protocolProvider, smartContractProvider } from "./providers/index.ts";
-import { strategyEvaluator } from "./evaluators/index.ts";
+import { investmentStrategyProvider } from "./providers/investmentStrategy.ts";
+import { defiEvaluator } from "./evaluators/defiEvaluator.ts";
 import { executeStrategyAction } from "./actions/index.ts";
 import {
   getTokenForProvider,
@@ -58,7 +54,7 @@ export function createAgent(
     databaseAdapter: db,
     token,
     modelProvider: character.modelProvider,
-    evaluators: [strategyEvaluator],
+    evaluators: [defiEvaluator],
     character,
     plugins: [
       bootstrapPlugin,
@@ -66,7 +62,7 @@ export function createAgent(
       starknetPlugin
       // character.settings?.secrets?.WALLET_PUBLIC_KEY ? solanaPlugin : null,
     ].filter(Boolean),
-    providers: [marketProvider, protocolProvider, smartContractProvider],
+    providers: [investmentStrategyProvider],
     actions: [executeStrategyAction],
     services: [],
     managers: [],

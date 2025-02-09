@@ -1,22 +1,13 @@
-import { Account, AllowArray, BigNumberish, Call, CallData, Contract, hash, TransactionExecutionStatus, Provider, constants } from 'starknet';
+import { Account, AllowArray, BigNumberish, Call, CallData, hash, TransactionExecutionStatus, Provider } from 'starknet';
 
-// Sample contract addresses for StarkNet protocols
+// Contract addresses for StarkNet protocols
 export const CONTRACTS = {
-    SHIKAMARU: {
-        POOL_MANAGER: ''
+    ZKLEND: {
+        POOL_MANAGER: '0x04c0a5193d58f74fbace4b74dcf65481e734ed1714121bdc571da345540efa05'
+    },
+    EKUBO: {
+        POOL_MANAGER: '0x010884171baf1914edc28d7afb619b40a4051cfae78a094a55d230f19e944a28'
     }
-    // AVNU: {
-    //     ROUTER: '0x041fd22b238fa21cfb074f0e0fd3b92b89b993e94c0e8c33047ada8f1a0453a7',
-    //     QUOTER: '0x042e7815d9e90b7ea53f4550f74dc12207ed6a0faaef57ba0dbf9a66f3762d82'
-    // },
-    // JEDISWAP: {
-    //     ROUTER: '0x041fd22b238fa21cfb074f0e0fd3b92b89b993e94c0e8c33047ada8f1a0453a7',
-    //     FACTORY: '0x00dad44c139a476c7a17fc8141e6db680e9abc9f56fe249a105094c44382c2fd'
-    // },
-    // NOSTRA: {
-    //     LENDING_POOL: '0x042e7815d9e90b7ea53f4550f74dc12207ed6a0faaef57ba0dbf9a66f3762d82',
-    //     PRICE_ORACLE: '0x0453c4c996f266c40bd80d9a6668c432a20f06c0a2fe72d3293682e8162c0d5e'
-    // }
 } as const;
 
 // Function selectors for common operations
@@ -96,66 +87,57 @@ export class StarkNetTransactionHandler {
         throw new Error('Transaction failed: max retries exceeded');
     }
 
-    // /**
-    //  * Sample method to swap tokens using AVNU
-    //  */
-    // async swapTokens(
-    //     tokenIn: string,
-    //     tokenOut: string,
-    //     amountIn: BigNumberish,
-    //     minAmountOut: BigNumberish
-    // ): Promise<string> {
-    //     const swapCall = await this.buildMethod(
-    //         CONTRACTS.AVNU.ROUTER,
-    //         'swap',
-    //         [tokenIn, tokenOut, amountIn, minAmountOut],
-    //         ['token_in', 'token_out', 'amount_in', 'min_amount_out']
-    //     );
+    /**
+     * Execute a deposit transaction on zkLend
+     */
+    async executeZklend(
+        token: string,
+        amount: BigNumberish,
+    ): Promise<string> {
+        const depositCall = await this.buildMethod(
+            CONTRACTS.ZKLEND.POOL_MANAGER,
+            'deposit',
+            [token, amount],
+            ['token', 'amount']
+        );
         
-    //     return this.execute([swapCall]);
-    // }
+        return this.execute([depositCall]);
+    }
 
-    // /**
-    //  * Sample method to provide liquidity to JediSwap
-    //  */
-    // async addLiquidity(
-    //     tokenA: string,
-    //     tokenB: string,
-    //     amountA: BigNumberish,
-    //     amountB: BigNumberish,
-    //     minLiquidity: BigNumberish
-    // ): Promise<string> {
-    //     const addLiquidityCall = await this.buildMethod(
-    //         CONTRACTS.JEDISWAP.ROUTER,
-    //         'add_liquidity',
-    //         [tokenA, tokenB, amountA, amountB, minLiquidity],
-    //         ['token_a', 'token_b', 'amount_a', 'amount_b', 'min_liquidity']
-    //     );
+    /**
+     * Execute a liquidity provision transaction on Ekubo
+     */
+    async executeEkubo(
+        token: string,
+        amount: BigNumberish,
+    ): Promise<string> {
+        // For Ekubo, we need to handle liquidity provision
+        // This is a simplified example - in reality, you'd need to calculate optimal amounts
+        const amountBigInt = BigInt(amount);
+        const minLiquidity = (amountBigInt * 95n) / 100n; // 95% slippage tolerance
         
-    //     return this.execute([addLiquidityCall]);
-    // }
-
-    // /**
-    //  * Sample method to deposit into Nostra lending pool
-    //  */
-    // async depositToLending(
-    //     token: string,
-    //     amount: BigNumberish
-    // ): Promise<string> {
-    //     const depositCall = await this.buildMethod(
-    //         CONTRACTS.NOSTRA.LENDING_POOL,
-    //         'deposit',
-    //         [token, amount],
-    //         ['token', 'amount']
-    //     );
+        const addLiquidityCall = await this.buildMethod(
+            CONTRACTS.EKUBO.POOL_MANAGER,
+            'add_liquidity',
+            [token, TOKEN_ADDRESSES.ETH, amountBigInt, 0n, minLiquidity],
+            ['token0', 'token1', 'amount0', 'amount1', 'min_liquidity']
+        );
         
-    //     return this.execute([depositCall]);
-    // }
+        return this.execute([addLiquidityCall]);
+    }
 
     private getExplorerLink(txHash: string): string {
         return `https://starkscan.co/tx/${txHash}`;
     }
 }
+
+// Token addresses
+const TOKEN_ADDRESSES = {
+    ETH: "0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7",
+    USDC: "0x053c91253bc9682c04929ca02ed00b3e423f6710d2ee7e0d5ebb06f3ecf368a8",
+    USDT: "0x068f5c6a61780768455de69077e07e89787839bf8166decfbf92b645209c0fb8",
+    STRK: "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d"
+};
 
 // Example usage:
 /*
@@ -191,3 +173,4 @@ await handler.addLiquidity(
 //         process.env.STARKNET_RPC_URL ||
 //         STARKNET_PUBLIC_RPC,
 // };
+

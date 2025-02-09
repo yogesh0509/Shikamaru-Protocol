@@ -1,7 +1,23 @@
-import { IAgentRuntime, Memory, State } from "@elizaos/core";
+import { IAgentRuntime, Memory } from "@elizaos/core";
 import { SAFETY_LIMITS } from "../utils.ts";
-import { Provider } from "../providers";
+// import { Provider } from "../providers";
 import { stringToUuid } from "@elizaos/core";
+
+interface DefiRecommendation {
+    recommendations: Array<{
+        protocol: string;
+        token: string;
+        amount: number;
+        expectedReturn: number;
+        confidence: string;
+        historicalPerformance: {
+            successRate: number;
+            averageReturn: number;
+            totalRecommendations: number;
+        }
+    }>;
+    protocolTotals: Record<string, number>;
+}
 
 export class AutoClient {
     private runtime: IAgentRuntime;
@@ -38,23 +54,8 @@ export class AutoClient {
                 roomId: stringToUuid("auto-trading")
             };
 
-            // Get market data
-            const marketProvider = this.runtime.providers.find((p: Provider) => p.name === "market");
-            const marketData = marketProvider ? JSON.parse(await marketProvider.get(this.runtime, dummyMemory)) : null;
-
-            // // Get protocol data
-            // const protocolProvider = this.runtime.providers.find((p: Provider) => p.name === "protocol");
-            // const protocolData = protocolProvider ? JSON.parse(await protocolProvider.get(this.runtime, dummyMemory)) : null;
-
-            // // Get current positions
-            // const smartContractProvider = this.runtime.providers.find((p: Provider) => p.name === "smart_contract");
-            // const positionData = smartContractProvider ? JSON.parse(await smartContractProvider.get(this.runtime, dummyMemory)) : null;
-
             // Create analysis context
             const context = {
-                marketData,
-                // protocolData,
-                // positionData,
                 character: this.runtime.character,
                 safetyLimits: SAFETY_LIMITS
             };
@@ -65,13 +66,13 @@ export class AutoClient {
                 throw new Error("Strategy evaluator not found");
             }
 
-            const recommendations = await evaluator.handler(this.runtime, {
+            const result = await evaluator.handler(this.runtime, {
                 ...dummyMemory,
                 content: { text: "Auto Trading", context }
-            });
+            }) as DefiRecommendation;
 
-            if (!recommendations) {
-                throw new Error("No recommendations received from evaluator");
+            if (!result || !result.recommendations || !result.protocolTotals) {
+                throw new Error("Invalid recommendations format received from evaluator");
             }
 
             // Execute trades based on recommendations
@@ -80,9 +81,16 @@ export class AutoClient {
                 throw new Error("Execute action not found");
             }
 
+            console.log("Executing trades for recommendations:", result);
+
+            // Execute all recommendations in one go
             await executeAction.handler(this.runtime, {
                 ...dummyMemory,
-                content: { text: "Auto Trading", recommendations }
+                content: {
+                    text: "Auto Trading",
+                    recommendations: result.recommendations,
+                    protocolTotals: result.protocolTotals
+                }
             });
 
             console.log(`[${new Date().toISOString()}] Trading cycle completed for ${this.runtime.character.name}`);

@@ -1,16 +1,8 @@
-import { IAgentRuntime, Memory, State } from "@elizaos/core";
-import { Provider } from './token';
-import { RiskLevel, STARKNET_PROTOCOLS } from './portfolioManager';
-
-interface StrategyConfig {
-    riskLevel: RiskLevel;
-    minInvestment: number;
-    maxInvestment: number;
-    rebalanceInterval: number; // in milliseconds
-    targetReturn: number;
-    maxDrawdown: number;
-    diversificationFactor: number; // 0-1, higher means more diversified
-}
+import { IAgentRuntime, Memory, Provider, State } from "@elizaos/core";
+import { RiskLevel, STARKNET_PROTOCOLS } from "./utils.ts";
+import { protocolDataProvider } from "./protocol.ts";
+import { portfolioManagerProvider } from "./portfolioManager.ts";
+import { investmentProvider } from "./investment.ts";
 
 interface InvestmentRecommendation {
     protocol: string;
@@ -21,34 +13,100 @@ interface InvestmentRecommendation {
     confidence: number;
 }
 
+interface RiskStrategy {
+    maxDrawdown: number;
+    riskLevel: RiskLevel;
+    protocols: {
+        [key: string]: {
+            name: string;
+            type: string;
+            maxAllocation: number;
+            minAllocation: number;
+        }
+    };
+    crossProtocolMetrics: {
+        rebalanceThreshold: number;
+        maxVolatility: number;
+        correlationLimit: number;
+        totalDrawdownLimit: number;
+    }
+}
+
 // Strategy configurations for different risk levels
-const STRATEGY_CONFIGS: Record<RiskLevel, StrategyConfig> = {
+const STRATEGY_CONFIGS: Record<RiskLevel, RiskStrategy> = {
     [RiskLevel.LOW]: {
+        maxDrawdown: 0.05,
         riskLevel: RiskLevel.LOW,
-        minInvestment: 100,
-        maxInvestment: 10000,
-        rebalanceInterval: 7 * 24 * 60 * 60 * 1000, // 1 week
-        targetReturn: 0.10, // 10% annual return
-        maxDrawdown: 0.05, // 5% max drawdown
-        diversificationFactor: 0.8
+        protocols: {
+            zkLend: {
+                name: 'zkLend',
+                type: 'LENDING',
+                maxAllocation: 80,
+                minAllocation: 60,
+            },
+            ekubo: {
+                name: 'Ekubo',
+                type: 'AMM',
+                maxAllocation: 20,
+                minAllocation: 10,
+            }
+        },
+        crossProtocolMetrics: {
+            rebalanceThreshold: 5,
+            maxVolatility: 12,
+            correlationLimit: 0.4,
+            totalDrawdownLimit: 8
+        }
     },
+
     [RiskLevel.MEDIUM]: {
+        maxDrawdown: 0.15,
         riskLevel: RiskLevel.MEDIUM,
-        minInvestment: 500,
-        maxInvestment: 50000,
-        rebalanceInterval: 3 * 24 * 60 * 60 * 1000, // 3 days
-        targetReturn: 0.25, // 25% annual return
-        maxDrawdown: 0.15, // 15% max drawdown
-        diversificationFactor: 0.6
+        protocols: {
+            zkLend: {
+                name: 'zkLend',
+                type: 'LENDING',
+                maxAllocation: 65,
+                minAllocation: 45,
+            },
+            ekubo: {
+                name: 'Ekubo',
+                type: 'AMM',
+                maxAllocation: 35,
+                minAllocation: 25,
+            }
+        },
+        crossProtocolMetrics: {
+            rebalanceThreshold: 8,
+            maxVolatility: 20,
+            correlationLimit: 0.6,
+            totalDrawdownLimit: 15
+        }
     },
+
     [RiskLevel.HIGH]: {
+        maxDrawdown: 0.30,
         riskLevel: RiskLevel.HIGH,
-        minInvestment: 1000,
-        maxInvestment: 100000,
-        rebalanceInterval: 24 * 60 * 60 * 1000, // 1 day
-        targetReturn: 0.50, // 50% annual return
-        maxDrawdown: 0.30, // 30% max drawdown
-        diversificationFactor: 0.4
+        protocols: {
+            zkLend: {
+                name: 'zkLend',
+                type: 'LENDING',
+                maxAllocation: 45,
+                minAllocation: 25,
+            },
+            ekubo: {
+                name: 'Ekubo',
+                type: 'AMM',
+                maxAllocation: 55,
+                minAllocation: 35,
+            }
+        },
+        crossProtocolMetrics: {
+            rebalanceThreshold: 10,
+            maxVolatility: 30,
+            correlationLimit: 0.8,
+            totalDrawdownLimit: 25
+        }
     }
 };
 
@@ -61,42 +119,51 @@ const SUPPORTED_TOKENS = {
 } as const;
 
 export const investmentStrategyProvider: Provider = {
-    name: "investment_strategy",
     get: async (runtime: IAgentRuntime, message: Memory, state?: State): Promise<string> => {
         try {
-            // Get data from other providers
-            const marketData = JSON.parse(await runtime.providers.get("market"));
-            const tokenData = JSON.parse(await runtime.providers.get("defi_token"));
-            const portfolioData = JSON.parse(await runtime.providers.get("portfolio_manager"));
+            const portfolioData = await portfolioManagerProvider();
+            const tokenData = await protocolDataProvider();
+            const investmentData = JSON.parse(await investmentProvider.get(runtime, message));
+            
+            // Map character name to risk level
+            let userRiskLevel: RiskLevel;
+            const characterName = runtime.character?.name?.toLowerCase() || '';
+            
+            if (characterName.includes('conservative')) {
+                userRiskLevel = RiskLevel.LOW;
+            } else if (characterName.includes('moderate')) {
+                userRiskLevel = RiskLevel.MEDIUM;
+            } else if (characterName.includes('aggressive')) {
+                userRiskLevel = RiskLevel.HIGH;
+            } else {
+                userRiskLevel = RiskLevel.MEDIUM; // Default to medium risk if unknown
+            }
 
-            // Extract user preferences and current market conditions
-            const userRiskLevel = portfolioData.portfolioState.riskLevel;
+            // Get strategy config and ensure it exists
             const strategyConfig = STRATEGY_CONFIGS[userRiskLevel];
-            const marketSentiment = portfolioData.marketSentiment;
+            if (!strategyConfig) {
+                console.error(`No strategy config found for risk level: ${userRiskLevel}`);
+                return JSON.stringify({ recommendations: [] });
+            }
+
+            const marketSentiment = portfolioData.overall;
+
+            console.log(userRiskLevel, investmentData.totalAmount);
 
             // Generate investment recommendations
             const recommendations = generateRecommendations(
                 strategyConfig,
                 tokenData,
-                marketData,
-                marketSentiment
+                marketSentiment,
+                investmentData.totalAmount
             );
 
-            // Calculate strategy performance metrics
-            const performanceMetrics = calculateStrategyPerformance(
-                recommendations,
-                portfolioData.portfolioState
-            );
+            console.log("Final recommendations:", recommendations);
 
             return JSON.stringify({
                 recommendations,
-                performanceMetrics,
-                nextRebalance: Date.now() + strategyConfig.rebalanceInterval,
-                marketConditions: {
-                    sentiment: marketSentiment,
-                    volatility: calculateMarketVolatility(marketData),
-                    trend: detectMarketTrend(marketData)
-                }
+                riskLevel: userRiskLevel,
+                totalAmount: investmentData.totalAmount
             });
         } catch (error) {
             console.error("Error in investment strategy provider:", error);
@@ -106,63 +173,168 @@ export const investmentStrategyProvider: Provider = {
 };
 
 function generateRecommendations(
-    config: StrategyConfig,
+    config: RiskStrategy,
     tokenData: any,
-    marketData: any,
-    sentiment: any
+    sentiment: any,
+    totalAmount: number
 ): InvestmentRecommendation[] {
+    console.log("Starting recommendation generation with:", {
+        riskLevel: config.riskLevel,
+        totalAmount,
+        sentiment
+    });
+
     const recommendations: InvestmentRecommendation[] = [];
     const pools = tokenData.pools;
 
-    // Filter pools by supported tokens and protocols
-    const eligiblePools = pools.filter((pool: any) => {
-        const isValidToken = Object.values(SUPPORTED_TOKENS).includes(pool.token0);
-        const isValidProtocol = Object.values(STARKNET_PROTOCOLS).includes(pool.protocol);
-        return isValidToken && isValidProtocol;
+    console.log("Available pools:", pools);
+
+    // Separate pools by protocol
+    const poolsByProtocol: { [key: string]: any[] } = {};
+    pools.forEach((pool: any) => {
+        // Case-insensitive protocol name matching
+        const protocolMatch = Object.values(STARKNET_PROTOCOLS).find(
+            p => p.toLowerCase() === pool.protocol.toLowerCase()
+        );
+        
+        if (Object.values(SUPPORTED_TOKENS).includes(pool.token0) && protocolMatch) {
+            const protocolKey = protocolMatch; // Use the correctly cased protocol name
+            if (!poolsByProtocol[protocolKey]) {
+                poolsByProtocol[protocolKey] = [];
+            }
+            poolsByProtocol[protocolKey].push(pool);
+        }
     });
 
-    // Sort pools by risk-adjusted return
-    const rankedPools = eligiblePools
-        .map((pool: any) => ({
-            ...pool,
-            riskAdjustedReturn: calculateRiskAdjustedReturn(pool, config),
-            marketFit: calculateMarketFit(pool, sentiment)
-        }))
-        .sort((a: any, b: any) => b.riskAdjustedReturn - a.riskAdjustedReturn);
+    console.log("Pools grouped by protocol:", poolsByProtocol);
 
-    // Select top pools based on diversification factor
-    const numPools = Math.max(2, Math.floor(rankedPools.length * config.diversificationFactor));
-    const selectedPools = rankedPools.slice(0, numPools);
+    // Calculate risk-adjusted returns for each pool
+    Object.keys(poolsByProtocol).forEach(protocol => {
+        console.log(`Calculating risk-adjusted returns for ${protocol}`);
+        poolsByProtocol[protocol] = poolsByProtocol[protocol]
+            .map(pool => {
+                const riskAdjusted = calculateRiskAdjustedReturn(pool, config);
+                const marketFit = calculateMarketFit(pool, sentiment);
+                console.log(`Pool ${protocol}/${pool.token0}:`, {
+                    apy: pool.apy,
+                    riskAdjusted,
+                    marketFit
+                });
+                return {
+                    ...pool,
+                    riskAdjustedReturn: riskAdjusted,
+                    marketFit: marketFit
+                };
+            })
+            .sort((a, b) => b.riskAdjustedReturn - a.riskAdjustedReturn);
+    });
 
-    // Generate recommendations for selected pools
-    let remainingAllocation = 100;
-    for (const pool of selectedPools) {
-        const allocation = calculatePoolAllocation(
-            pool,
-            config,
-            remainingAllocation,
-            selectedPools.length
-        );
+    // Allocate funds according to protocol constraints
+    Object.entries(config.protocols).forEach(([protocol, protocolConfig]) => {
+        console.log(`Processing allocations for ${protocol}:`, protocolConfig);
 
-        recommendations.push({
-            protocol: pool.protocol,
-            token: pool.token0,
-            amount: allocation,
-            expectedReturn: pool.apy,
-            riskScore: calculatePoolRiskScore(pool),
-            confidence: calculateConfidenceScore(pool, sentiment)
+        if (!poolsByProtocol[protocol] || poolsByProtocol[protocol].length === 0) {
+            console.log(`No pools found for ${protocol}, skipping`);
+            return;
+        }
+
+        // Calculate allocation for this protocol based on strategy config
+        const minAllocation = protocolConfig.minAllocation / 100;
+        const maxAllocation = protocolConfig.maxAllocation / 100;
+        
+        // Start with minimum allocation, adjust based on market conditions
+        let protocolAllocation = minAllocation;
+        const marketConditionBonus = poolsByProtocol[protocol][0].marketFit * 
+            (maxAllocation - minAllocation);
+        protocolAllocation = Math.min(maxAllocation, 
+            protocolAllocation + marketConditionBonus);
+
+        console.log(`${protocol} allocation:`, {
+            min: minAllocation,
+            max: maxAllocation,
+            final: protocolAllocation,
+            marketBonus: marketConditionBonus
         });
 
-        remainingAllocation -= allocation;
-    }
+        // Calculate actual amount for this protocol
+        const protocolAmount = totalAmount * protocolAllocation;
+        console.log(`${protocol} amount:`, {
+            totalAmount,
+            protocolAllocation,
+            protocolAmount
+        });
 
+        // Select top pools for this protocol
+        const selectedPools = poolsByProtocol[protocol]
+            .slice(0, Math.min(3, poolsByProtocol[protocol].length));
+
+        // Distribute protocol allocation among selected pools
+        const totalRiskAdjustedReturn = selectedPools
+            .reduce((sum, pool) => sum + pool.riskAdjustedReturn, 0);
+
+        console.log(`${protocol} pool distribution:`, {
+            selectedPools: selectedPools.length,
+            totalRiskAdjustedReturn
+        });
+
+        selectedPools.forEach(pool => {
+            const poolWeight = pool.riskAdjustedReturn / totalRiskAdjustedReturn;
+            const amount = protocolAmount * poolWeight;
+
+            console.log(`Adding recommendation for ${protocol}/${pool.token0}:`, {
+                poolWeight,
+                amount,
+                expectedReturn: pool.apy
+            });
+
+            recommendations.push({
+                protocol: pool.protocol,
+                token: pool.token0,
+                amount: amount,
+                expectedReturn: pool.apy,
+                riskScore: calculatePoolRiskScore(pool),
+                confidence: calculateConfidenceScore(pool, sentiment)
+            });
+        });
+    });
+
+    console.log("Final recommendations before return:", recommendations);
     return recommendations;
 }
 
-function calculateRiskAdjustedReturn(pool: any, config: StrategyConfig): number {
-    const sharpeRatio = (pool.apy - 0.02) / (pool.volatility || 0.1); // Assuming 2% risk-free rate
-    const drawdownPenalty = Math.max(0, pool.maxDrawdown - config.maxDrawdown);
-    return sharpeRatio * (1 - drawdownPenalty);
+function calculateRiskAdjustedReturn(pool: any, config: RiskStrategy): number {
+    if (!config) {
+        console.log("No config provided for risk adjustment");
+        return 0;
+    }
+
+    // Extract APY from pool data
+    const apy = pool.apy || pool.apr || 0;
+    
+    // Calculate volatility from volume/TVL ratio as a proxy
+    const volume = pool.volume24h?.usd || pool.volume24h || 0;
+    const tvl = pool.tvl?.usd || pool.tvl || 1; // Avoid division by zero
+    const volatility = volume / tvl;
+    
+    // Calculate Sharpe ratio with a minimum volatility floor
+    const sharpeRatio = (apy - 0.02) / (volatility || 0.1); // Assuming 2% risk-free rate
+    
+    // Use volume/TVL ratio as a proxy for drawdown risk
+    const estimatedDrawdown = Math.min(volatility, 0.3); // Cap at 30%
+    const drawdownPenalty = Math.max(0, estimatedDrawdown - (config.maxDrawdown || 0.15));
+    
+    const result = Math.max(0, sharpeRatio * (1 - drawdownPenalty));
+    console.log("Risk adjusted return calculation:", {
+        apy,
+        volume,
+        tvl,
+        volatility,
+        sharpeRatio,
+        estimatedDrawdown,
+        drawdownPenalty,
+        result
+    });
+    return result;
 }
 
 function calculateMarketFit(pool: any, sentiment: any): number {
@@ -172,22 +344,6 @@ function calculateMarketFit(pool: any, sentiment: any): number {
     const tvlScore = Math.min(pool.tvl / 1e7, 1);
     
     return (sentimentAlignment * 0.4) + (volumeScore * 0.3) + (tvlScore * 0.3);
-}
-
-function calculatePoolAllocation(
-    pool: any,
-    config: StrategyConfig,
-    remainingAllocation: number,
-    numPools: number
-): number {
-    const baseAllocation = remainingAllocation / numPools;
-    const riskAdjustment = 1 - (pool.riskScore || 0);
-    const sentimentAdjustment = pool.marketFit;
-    
-    return Math.min(
-        remainingAllocation,
-        baseAllocation * riskAdjustment * (1 + sentimentAdjustment)
-    );
 }
 
 function calculatePoolRiskScore(pool: any): number {
@@ -218,77 +374,3 @@ function calculateDataQuality(pool: any): number {
            (dataFreshness ? 0.3 : 0) +
            (Math.min(dataCompleteness, 1) * 0.3);
 }
-
-function calculateStrategyPerformance(
-    recommendations: InvestmentRecommendation[],
-    portfolioState: any
-): any {
-    const totalValue = portfolioState.totalValue;
-    const weightedReturn = recommendations.reduce(
-        (acc, rec) => acc + (rec.expectedReturn * rec.amount / 100),
-        0
-    );
-    
-    const portfolioVolatility = calculatePortfolioVolatility(
-        recommendations,
-        portfolioState.positions
-    );
-    
-    return {
-        expectedAnnualReturn: weightedReturn,
-        volatility: portfolioVolatility,
-        sharpeRatio: (weightedReturn - 0.02) / portfolioVolatility, // Assuming 2% risk-free rate
-        diversificationScore: calculateDiversificationScore(recommendations),
-        riskScore: calculatePortfolioRiskScore(recommendations)
-    };
-}
-
-function calculatePortfolioVolatility(
-    recommendations: InvestmentRecommendation[],
-    currentPositions: any[]
-): number {
-    // Simplified portfolio volatility calculation
-    const weightedVolatility = recommendations.reduce(
-        (acc, rec) => acc + (rec.riskScore * rec.amount / 100),
-        0
-    );
-    
-    return weightedVolatility;
-}
-
-function calculateDiversificationScore(recommendations: InvestmentRecommendation[]): number {
-    const protocols = new Set(recommendations.map(r => r.protocol));
-    const tokens = new Set(recommendations.map(r => r.token));
-    
-    const protocolDiversity = protocols.size / recommendations.length;
-    const tokenDiversity = tokens.size / recommendations.length;
-    
-    return (protocolDiversity + tokenDiversity) / 2;
-}
-
-function calculatePortfolioRiskScore(recommendations: InvestmentRecommendation[]): number {
-    return recommendations.reduce(
-        (acc, rec) => acc + (rec.riskScore * rec.amount / 100),
-        0
-    );
-}
-
-function calculateMarketVolatility(marketData: any): number {
-    const volatilities = Object.values(marketData).map(
-        (token: any) => token.volatility || 0
-    );
-    return volatilities.reduce((a: number, b: number) => a + b, 0) / volatilities.length;
-}
-
-function detectMarketTrend(marketData: any): string {
-    const priceChanges = Object.values(marketData).map(
-        (token: any) => token.priceChange24h || 0
-    );
-    const averageChange = priceChanges.reduce((a: number, b: number) => a + b, 0) / priceChanges.length;
-    
-    if (averageChange > 5) return "STRONG_BULLISH";
-    if (averageChange > 2) return "BULLISH";
-    if (averageChange < -5) return "STRONG_BEARISH";
-    if (averageChange < -2) return "BEARISH";
-    return "NEUTRAL";
-} 

@@ -1,42 +1,12 @@
-import { IAgentRuntime, Memory, State } from "@elizaos/core";
-import { STARKNET_TOKENS, STARKNET_PROTOCOLS, Provider } from './token';
+import { STARKNET_TOKENS } from './utils.ts';
 import axios from 'axios';
 
 // Types for market data
 interface TokenPriceData {
     price: number;
     priceChange24h: number;
-    marketCap: number;
     totalVolume: number;
     priceHistory: number[];
-    tvl?: number;
-    stakingApy?: number;
-    networkStats?: {
-        transactions24h: number;
-        activeAccounts: number;
-    };
-    source?: string;
-}
-
-interface DexLiquidityData {
-    volume24h: number;
-    liquidity: number;
-    priceImpact: number;
-}
-
-interface TechnicalAnalysis {
-    rsi: number;
-    macd: {
-        value: number;
-        signal: number;
-        histogram: number;
-    };
-    movingAverages: {
-        sma20: number;
-        sma50: number;
-        sma200: number;
-        ema20: number;
-    };
 }
 
 interface MarketData {
@@ -44,57 +14,46 @@ interface MarketData {
     priceChange24h: number;
     volume24h: number;
     volume24h_previous: number;
-    marketCap: number;
     volatility: number;
-    technicalAnalysis: TechnicalAnalysis;
-    dexData: DexLiquidityData;
-    volatilityMetrics: {
-        volatility24h: number;
-        maxDrawdown: number;
-        sharpeRatio: number;
+    technicalAnalysis: {
+        rsi: number;
+        macd: { histogram: number };
+        movingAverages: { sma20: number; sma50: number };
     };
 }
 
 // Fallback data for when APIs are unavailable
 const fallbackData: Record<string, TokenPriceData> = {
-    'starknet': {
-        price: 3.45,
-        priceChange24h: 2.5,
-        marketCap: 345000000,
-        totalVolume: 15000000,
-        priceHistory: Array(24).fill(0).map((_, i) => 3.45 + Math.sin(i / 4) * 0.1),
-        tvl: 100000000,
-        stakingApy: 12.5,
-        networkStats: {
-            transactions24h: 150000,
-            activeAccounts: 50000
-        },
-        source: 'fallback'
-    }
-};
-
-// Fallback DEX data
-const fallbackDexData: Record<string, DexLiquidityData> = {
-    'ETH/USDC': {
-        volume24h: 5000000,
-        liquidity: 20000000,
-        priceImpact: 0.5
+    'ethereum': {
+        price: 2665.74,
+        priceChange24h: 2.2028604496813835,
+        totalVolume: 13931051041.936989,
+        priceHistory: Array(24).fill(0).map((_, i) => 2665.74 + Math.sin(i / 4) * 50)
     },
-    'STRK/USDC': {
-        volume24h: 2000000,
-        liquidity: 8000000,
-        priceImpact: 1.2
+    'usd': {
+        price: 0.998477,
+        priceChange24h: -0.22600645332322725,
+        totalVolume: 428089.7928788941,
+        priceHistory: Array(24).fill(0).map((_, i) => 0.998477 + Math.sin(i / 4) * 0.001)
+    },
+    'starknet': {
+        price: 0.244307,
+        priceChange24h: 7.375095921348371,
+        totalVolume: 31775872.91140891,
+        priceHistory: Array(24).fill(0).map((_, i) => 0.244307 + Math.sin(i / 4) * 0.01)
     }
 };
 
-// Helper function to calculate volatility metrics
-function calculateVolatilityMetrics(priceHistory: number[]): {
-    volatility24h: number;
-    maxDrawdown: number;
-    sharpeRatio: number;
-} {
+// CoinGecko API configuration
+const COINGECKO_API_KEY = 'CG-1YsMfoXvDDYPHa1oLBv7PzMb';
+const COINGECKO_API_BASE = 'https://api.coingecko.com/api/v3';
+const RETRY_DELAY = 1000; // 1 second delay between retries
+const MAX_RETRIES = 3;
+
+// Helper function to calculate volatility
+function calculateVolatility(priceHistory: number[]): number {
     if (!priceHistory || priceHistory.length < 2) {
-        return { volatility24h: 0, maxDrawdown: 0, sharpeRatio: 0 };
+        return 0;
     }
 
     const returns = [];
@@ -104,25 +63,7 @@ function calculateVolatilityMetrics(priceHistory: number[]): {
 
     const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
     const variance = returns.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / returns.length;
-    const volatility = Math.sqrt(variance) * Math.sqrt(365);
-
-    let maxDrawdown = 0;
-    let peak = priceHistory[0];
-    for (const price of priceHistory) {
-        if (price > peak) peak = price;
-        const drawdown = (peak - price) / peak;
-        if (drawdown > maxDrawdown) maxDrawdown = drawdown;
-    }
-
-    const riskFreeRate = 0.02;
-    const excessReturn = mean * 365 - riskFreeRate;
-    const sharpeRatio = excessReturn / volatility;
-
-    return {
-        volatility24h: volatility,
-        maxDrawdown: maxDrawdown * 100,
-        sharpeRatio
-    };
+    return Math.sqrt(variance) * Math.sqrt(365);
 }
 
 // Helper function to calculate RSI
@@ -146,9 +87,9 @@ function calculateRSI(prices: number[], period: number = 14): number {
 }
 
 // Helper function to calculate MACD
-function calculateMACD(prices: number[]): { value: number; signal: number; histogram: number; } {
+function calculateMACD(prices: number[]): { histogram: number } {
     if (prices.length < 26) {
-        return { value: 0, signal: 0, histogram: 0 };
+        return { histogram: 0 };
     }
 
     const ema12 = calculateEMA(prices, 12);
@@ -157,8 +98,6 @@ function calculateMACD(prices: number[]): { value: number; signal: number; histo
     const signalLine = calculateEMA([macdLine], 9);
 
     return {
-        value: macdLine,
-        signal: signalLine,
         histogram: macdLine - signalLine
     };
 }
@@ -176,17 +115,10 @@ function calculateEMA(prices: number[], period: number): number {
 }
 
 // Helper function to calculate moving averages
-function calculateMovingAverages(prices: number[]): {
-    sma20: number;
-    sma50: number;
-    sma200: number;
-    ema20: number;
-} {
+function calculateMovingAverages(prices: number[]): { sma20: number; sma50: number } {
     return {
         sma20: calculateSMA(prices, 20),
-        sma50: calculateSMA(prices, 50),
-        sma200: calculateSMA(prices, 200),
-        ema20: calculateEMA(prices, 20)
+        sma50: calculateSMA(prices, 50)
     };
 }
 
@@ -196,13 +128,47 @@ function calculateSMA(prices: number[], period: number): number {
     return prices.slice(-period).reduce((a, b) => a + b) / period;
 }
 
+async function fetchWithRetry(url: string, config: any, retries = 0): Promise<any> {
+    try {
+        const response = await axios.get(url, config);
+        return response;
+    } catch (error: any) {
+        if (error.response?.status === 429 && retries < MAX_RETRIES) {
+            console.warn(`Rate limit hit, retrying after ${RETRY_DELAY}ms...`);
+            await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+            return fetchWithRetry(url, config, retries + 1);
+        }
+        throw error;
+    }
+}
+
 async function fetchTokenPriceData(token: string): Promise<TokenPriceData> {
     try {
-        // Try CoinGecko with fallback
+        const config = {
+            headers: {
+                'x-cg-pro-api-key': COINGECKO_API_KEY,
+                'accept': 'application/json'
+            }
+        };
+
         try {
             const [priceData, historyData] = await Promise.all([
-                axios.get(`https://api.coingecko.com/api/v3/simple/price?ids=${token}&vs_currencies=usd&include_24hr_change=true&include_market_cap=true&include_24hr_vol=true`),
-                axios.get(`https://api.coingecko.com/api/v3/coins/${token}/market_chart?vs_currency=usd&days=7`)
+                fetchWithRetry(`${COINGECKO_API_BASE}/simple/price`, {
+                    ...config,
+                    params: {
+                        ids: token,
+                        vs_currencies: 'usd',
+                        include_24hr_change: true,
+                        include_24hr_vol: true
+                    }
+                }),
+                fetchWithRetry(`${COINGECKO_API_BASE}/coins/${token}/market_chart`, {
+                    ...config,
+                    params: {
+                        vs_currency: 'usd',
+                        days: 7
+                    }
+                })
             ]);
 
             const prices = historyData.data.prices;
@@ -212,87 +178,53 @@ async function fetchTokenPriceData(token: string): Promise<TokenPriceData> {
             return {
                 price: priceData.data[token].usd,
                 priceChange24h: priceData.data[token].usd_24h_change,
-                marketCap: priceData.data[token].usd_market_cap,
                 totalVolume: priceData.data[token].usd_24h_vol,
-                priceHistory: normalizedPrices,
-                source: 'coingecko'
+                priceHistory: normalizedPrices
             };
-        } catch (error) {
-            console.warn(`CoinGecko API error for ${token}, using fallback data:`, error.message);
+        } catch (error: any) {
+            console.warn(`CoinGecko API error for ${token} (${error.response?.status || error.message}), using fallback data`);
             return fallbackData[token] || {
                 price: 0,
                 priceChange24h: 0,
-                marketCap: 0,
                 totalVolume: 0,
-                priceHistory: Array(24).fill(0),
-                source: 'fallback'
+                priceHistory: Array(24).fill(0)
             };
         }
     } catch (error) {
-        console.error(`Error fetching price data for ${token}:`, error.message);
+        console.error(`Error fetching price data for ${token}:`, error);
         throw error;
     }
 }
 
-async function fetchTechnicalAnalysis(pair: string): Promise<TechnicalAnalysis> {
+export const marketProvider = async () => {
     try {
-        const [token0] = pair.split('/');
-        const priceHistory = await fetchTokenPriceData(token0.toLowerCase());
+        const marketData: Record<string, MarketData> = {};
 
-        const rsi = calculateRSI(priceHistory.priceHistory);
-        const macd = calculateMACD(priceHistory.priceHistory);
-        const movingAverages = calculateMovingAverages(priceHistory.priceHistory);
+        // Fetch market data for each supported token
+        for (const [symbol, address] of Object.entries(STARKNET_TOKENS)) {
+            const priceData = await fetchTokenPriceData(symbol.toLowerCase());
+            const volatility = calculateVolatility(priceData.priceHistory);
 
-        return { rsi, macd, movingAverages };
+            marketData[symbol] = {
+                price: priceData.price,
+                priceChange24h: priceData.priceChange24h,
+                volume24h: priceData.totalVolume,
+                volume24h_previous: priceData.totalVolume * 0.9, // Estimate previous day
+                volatility,
+                technicalAnalysis: {
+                    rsi: calculateRSI(priceData.priceHistory),
+                    macd: calculateMACD(priceData.priceHistory),
+                    movingAverages: calculateMovingAverages(priceData.priceHistory)
+                }
+            };
+        }
+
+        return JSON.stringify({
+            marketData,
+            timestamp: Date.now()
+        });
     } catch (error) {
-        console.error(`Error performing technical analysis for ${pair}:`, error);
+        console.error("Error in market provider:", error);
         throw error;
     }
-}
-
-export const marketProvider =
-    async () => {
-        try {
-            const marketData: Record<string, MarketData> = {};
-
-            // Fetch market data for each supported token
-            for (const [symbol, address] of Object.entries(STARKNET_TOKENS)) {
-                const priceData = await fetchTokenPriceData(symbol.toLowerCase());
-                const technicalAnalysis = await fetchTechnicalAnalysis(`${symbol}/USD`);
-                const volatilityMetrics = calculateVolatilityMetrics(priceData.priceHistory);
-
-                // Get DEX data for token pairs
-                const dexKey = `${symbol}/USDC`;
-                const dexData = fallbackDexData[dexKey] || {
-                    volume24h: 0,
-                    liquidity: 0,
-                    priceImpact: 0
-                };
-
-                marketData[symbol] = {
-                    price: priceData.price,
-                    priceChange24h: priceData.priceChange24h,
-                    volume24h: priceData.totalVolume,
-                    volume24h_previous: priceData.totalVolume * 0.9, // Estimate previous day
-                    marketCap: priceData.marketCap,
-                    volatility: volatilityMetrics.volatility24h,
-                    technicalAnalysis,
-                    dexData,
-                    volatilityMetrics
-                };
-            }
-
-            return JSON.stringify({
-                marketData,
-                timestamp: Date.now(),
-                dataQuality: {
-                    source: 'hybrid', // coingecko + fallback
-                    reliability: 'medium',
-                    lastUpdate: new Date().toISOString()
-                }
-            });
-        } catch (error) {
-            console.error("Error in market provider:", error);
-            throw error;
-        }
-    }
+};
