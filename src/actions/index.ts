@@ -4,7 +4,7 @@ import { Account, RpcProvider } from "starknet";
 
 // Initialize StarkNet provider and account
 const STARKNET_RPC = process.env.STARKNET_RPC_URL || "https://starknet-sepolia.public.blastapi.io";
-const ACCOUNT_ADDRESS = process.env.STARKNET_ACCOUNT_ADDRESS;
+const ACCOUNT_ADDRESS = process.env.STARKNET_ADDRESS;
 const PRIVATE_KEY = process.env.STARKNET_PRIVATE_KEY;
 
 if (!ACCOUNT_ADDRESS || !PRIVATE_KEY) {
@@ -50,8 +50,6 @@ export const executeStrategyAction: Action = {
                 throw new Error("Invalid action format");
             }
 
-            console.log("Processing recommendations:", content.recommendations);
-
             // Sort recommendations by protocol and confidence
             const sortedRecommendations = content.recommendations.sort((a, b) => {
                 const confidenceScore = { high: 3, medium: 2, low: 1, none: 0 };
@@ -69,8 +67,6 @@ export const executeStrategyAction: Action = {
                 const protocolRecs = sortedRecommendations.filter(
                     rec => rec.protocol.toLowerCase() === protocol.toLowerCase()
                 );
-
-                console.log(`Processing ${protocol} recommendations:`, protocolRecs);
 
                 // Execute transactions for this protocol's recommendations
                 for (const rec of protocolRecs) {

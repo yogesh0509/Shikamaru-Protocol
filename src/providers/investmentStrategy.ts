@@ -11,6 +11,12 @@ interface InvestmentRecommendation {
     expectedReturn: number;
     riskScore: number;
     confidence: number;
+    poolData?: {
+        token0Address: string;
+        token1Address: string;
+        fee: number;
+        tickSpacing: number;
+    };
 }
 
 interface RiskStrategy {
@@ -192,13 +198,13 @@ function generateRecommendations(
     // Separate pools by protocol
     const poolsByProtocol: { [key: string]: any[] } = {};
     pools.forEach((pool: any) => {
-        // Case-insensitive protocol name matching
-        const protocolMatch = Object.values(STARKNET_PROTOCOLS).find(
-            p => p.toLowerCase() === pool.protocol.toLowerCase()
-        );
+        // Normalize protocol names to lowercase for comparison
+        const poolProtocol = pool.protocol.toLowerCase();
+        const protocolKey = Object.entries(STARKNET_PROTOCOLS).find(
+            ([key, value]) => value.toLowerCase() === poolProtocol
+        )?.[0];
         
-        if (Object.values(SUPPORTED_TOKENS).includes(pool.token0) && protocolMatch) {
-            const protocolKey = protocolMatch; // Use the correctly cased protocol name
+        if (Object.values(SUPPORTED_TOKENS).includes(pool.token0) && protocolKey) {
             if (!poolsByProtocol[protocolKey]) {
                 poolsByProtocol[protocolKey] = [];
             }
@@ -231,9 +237,16 @@ function generateRecommendations(
 
     // Allocate funds according to protocol constraints
     Object.entries(config.protocols).forEach(([protocol, protocolConfig]) => {
+        // Normalize protocol name for comparison
+        const normalizedProtocol = protocol.toLowerCase();
         console.log(`Processing allocations for ${protocol}:`, protocolConfig);
 
-        if (!poolsByProtocol[protocol] || poolsByProtocol[protocol].length === 0) {
+        // Find matching pools using case-insensitive comparison
+        const matchingPools = poolsByProtocol[Object.keys(poolsByProtocol).find(
+            key => key.toLowerCase() === normalizedProtocol
+        ) || protocol];
+
+        if (!matchingPools || matchingPools.length === 0) {
             console.log(`No pools found for ${protocol}, skipping`);
             return;
         }
@@ -244,7 +257,7 @@ function generateRecommendations(
         
         // Start with minimum allocation, adjust based on market conditions
         let protocolAllocation = minAllocation;
-        const marketConditionBonus = poolsByProtocol[protocol][0].marketFit * 
+        const marketConditionBonus = matchingPools[0].marketFit * 
             (maxAllocation - minAllocation);
         protocolAllocation = Math.min(maxAllocation, 
             protocolAllocation + marketConditionBonus);
@@ -265,8 +278,8 @@ function generateRecommendations(
         });
 
         // Select top pools for this protocol
-        const selectedPools = poolsByProtocol[protocol]
-            .slice(0, Math.min(3, poolsByProtocol[protocol].length));
+        const selectedPools = matchingPools
+            .slice(0, Math.min(3, matchingPools.length));
 
         // Distribute protocol allocation among selected pools
         const totalRiskAdjustedReturn = selectedPools
@@ -281,21 +294,42 @@ function generateRecommendations(
             const poolWeight = pool.riskAdjustedReturn / totalRiskAdjustedReturn;
             const amount = protocolAmount * poolWeight;
 
-            console.log(`Adding recommendation for ${protocol}/${pool.token0}:`, {
-                poolWeight,
-                amount,
-                expectedReturn: pool.apy
-            });
+                if (pool.protocol === 'Ekubo') {
+                    // For Ekubo, add a single recommendation with both token symbols
+                    recommendations.push({
+                        protocol: pool.protocol,
+                        token: `${pool.token0}/${pool.token1}`, // Show both tokens in the pair
+                        amount: amount,
+                        expectedReturn: pool.apy,
+                        riskScore: calculatePoolRiskScore(pool),
+                        confidence: calculateConfidenceScore(pool, sentiment),
+                        poolData: {
+                            token0Address: pool.token0Address,
+                            token1Address: pool.token1Address,
+                            fee: pool.fee,
+                            tickSpacing: pool.tickSpacing
+                        }
+                    });
+                } else {
+                    // For other protocols, keep existing logic
+                    recommendations.push({
+                        protocol: pool.protocol,
+                        token: pool.token0,
+                        amount: amount,
+                        expectedReturn: pool.apy,
+                        riskScore: calculatePoolRiskScore(pool),
+                        confidence: calculateConfidenceScore(pool, sentiment)
+                    });
+                }
 
-            recommendations.push({
-                protocol: pool.protocol,
-                token: pool.token0,
-                amount: amount,
-                expectedReturn: pool.apy,
-                riskScore: calculatePoolRiskScore(pool),
-                confidence: calculateConfidenceScore(pool, sentiment)
+                console.log(`Adding recommendation for ${protocol}/${pool.token0}${pool.protocol === 'Ekubo' ? `/${pool.token1}` : ''}:`, {
+                    poolWeight,
+                    amount,
+                    expectedReturn: pool.apy,
+                    isEkubo: pool.protocol === 'Ekubo'
+                });
             });
-        });
+        
     });
 
     console.log("Final recommendations before return:", recommendations);
