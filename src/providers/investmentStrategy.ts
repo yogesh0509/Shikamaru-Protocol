@@ -154,8 +154,6 @@ export const investmentStrategyProvider: Provider = {
 
             const marketSentiment = portfolioData.overall;
 
-            console.log(userRiskLevel, investmentData.totalAmount);
-
             // Generate investment recommendations
             const recommendations = generateRecommendations(
                 strategyConfig,
@@ -193,8 +191,6 @@ function generateRecommendations(
     const recommendations: InvestmentRecommendation[] = [];
     const pools = tokenData.pools;
 
-    console.log("Available pools:", pools);
-
     // Separate pools by protocol
     const poolsByProtocol: { [key: string]: any[] } = {};
     pools.forEach((pool: any) => {
@@ -211,8 +207,6 @@ function generateRecommendations(
             poolsByProtocol[protocolKey].push(pool);
         }
     });
-
-    console.log("Pools grouped by protocol:", poolsByProtocol);
 
     // Calculate risk-adjusted returns for each pool
     Object.keys(poolsByProtocol).forEach(protocol => {
@@ -262,20 +256,8 @@ function generateRecommendations(
         protocolAllocation = Math.min(maxAllocation, 
             protocolAllocation + marketConditionBonus);
 
-        console.log(`${protocol} allocation:`, {
-            min: minAllocation,
-            max: maxAllocation,
-            final: protocolAllocation,
-            marketBonus: marketConditionBonus
-        });
-
         // Calculate actual amount for this protocol
         const protocolAmount = totalAmount * protocolAllocation;
-        console.log(`${protocol} amount:`, {
-            totalAmount,
-            protocolAllocation,
-            protocolAmount
-        });
 
         // Select top pools for this protocol
         const selectedPools = matchingPools
@@ -358,16 +340,6 @@ function calculateRiskAdjustedReturn(pool: any, config: RiskStrategy): number {
     const drawdownPenalty = Math.max(0, estimatedDrawdown - (config.maxDrawdown || 0.15));
     
     const result = Math.max(0, sharpeRatio * (1 - drawdownPenalty));
-    console.log("Risk adjusted return calculation:", {
-        apy,
-        volume,
-        tvl,
-        volatility,
-        sharpeRatio,
-        estimatedDrawdown,
-        drawdownPenalty,
-        result
-    });
     return result;
 }
 
